@@ -1,0 +1,5 @@
+streamlit>=1.36
+akshare>=1.14
+pandas>=2.0
+openai>=1.30
+tenacity>=8.2
