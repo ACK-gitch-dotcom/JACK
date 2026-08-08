@@ -6,7 +6,7 @@ Required environment variables:
 - DEEPSEEK_BASE_URL (example: https://api.deepseek.com/v1)
 
 Required Python packages and standard-library modules:
-streamlit, akshare, pandas, openai, curl_cffi, feedparser, requests,
+streamlit, akshare, pandas, openai, feedparser, requests,
 json, os, time, datetime, re, tenacity
 """
 
@@ -20,18 +20,13 @@ import os
 import re
 import time
 import unicodedata
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
 import requests as _requests
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential, wait_fixed
-
-try:
-    from curl_cffi import requests as _cffi_requests
-except Exception:
-    _cffi_requests = None
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 try:
     import feedparser as _feedparser
@@ -52,7 +47,7 @@ except Exception:
 APP_TITLE = "Personal Off-Exchange Fund Investment Assistant"
 CACHE_TTL_SECONDS = 300
 ANALYSIS_COOLDOWN_SECONDS = 10.0
-HTTP_TIMEOUT_SECONDS = 5
+HTTP_TIMEOUT_SECONDS = 10
 
 _INJECTION_PATTERNS = (
     re.compile(r"ignore\s+(all\s+|any\s+)?(previous|prior|above|earlier)\s+instructions", re.I),
@@ -72,159 +67,6 @@ _HOLDING_COLUMN_ALIASES = {
 
 class AnalysisError(RuntimeError):
     """User-facing error raised when an analysis cannot be produced safely."""
-
-
-def _mock_capital_flow_df() -> pd.DataFrame:
-    # MODIFIED: static Layer 3 fallback carries today's date so the UI always has a fresh-looking snapshot.
-    today = date.today().isoformat()
-    return pd.DataFrame(
-        [
-            {"industry": "半导体", "industry_code": "BK1036", "main_net_inflow": 21.6e8, "change_pct": 2.4, "source": "static-layer3", "data_date": today},
-            {"industry": "人工智能", "industry_code": "BK0800", "main_net_inflow": 17.8e8, "change_pct": 1.9, "source": "static-layer3", "data_date": today},
-            {"industry": "新能源", "industry_code": "BK1033", "main_net_inflow": 12.3e8, "change_pct": 1.1, "source": "static-layer3", "data_date": today},
-            {"industry": "高端制造", "industry_code": "BK0891", "main_net_inflow": 9.7e8, "change_pct": 0.8, "source": "static-layer3", "data_date": today},
-            {"industry": "医药", "industry_code": "BK0465", "main_net_inflow": 6.4e8, "change_pct": 0.5, "source": "static-layer3", "data_date": today},
-        ]
-    )
-
-
-def _mock_fund_universe_df() -> pd.DataFrame:
-    rows = [
-        {
-            "fund_code": "999001",
-            "fund_name": "华证半导体产业精选联接A",
-            "fund_size": "8.6亿元",
-            "fund_size_numeric": 8.6e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "18.50%",
-            "one_year_return_numeric": 18.5,
-            "one_month_return_numeric": 4.2,
-            "three_month_return_numeric": 9.8,
-            "volatility_pct": 22.3,
-        },
-        {
-            "fund_code": "999002",
-            "fund_name": "华证半导体产业精选联接C",
-            "fund_size": "3.2亿元",
-            "fund_size_numeric": 3.2e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "17.90%",
-            "one_year_return_numeric": 17.9,
-            "one_month_return_numeric": 4.0,
-            "three_month_return_numeric": 9.5,
-            "volatility_pct": 22.1,
-        },
-        {
-            "fund_code": "999003",
-            "fund_name": "华证人工智能算力联接A",
-            "fund_size": "12.1亿元",
-            "fund_size_numeric": 12.1e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "25.60%",
-            "one_year_return_numeric": 25.6,
-            "one_month_return_numeric": 6.1,
-            "three_month_return_numeric": 13.2,
-            "volatility_pct": 28.4,
-        },
-        {
-            "fund_code": "999004",
-            "fund_name": "华证人工智能算力联接C",
-            "fund_size": "5.8亿元",
-            "fund_size_numeric": 5.8e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "25.10%",
-            "one_year_return_numeric": 25.1,
-            "one_month_return_numeric": 6.0,
-            "three_month_return_numeric": 13.0,
-            "volatility_pct": 28.2,
-        },
-        {
-            "fund_code": "999005",
-            "fund_name": "华证新能源储能联接A",
-            "fund_size": "15.4亿元",
-            "fund_size_numeric": 15.4e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "12.80%",
-            "one_year_return_numeric": 12.8,
-            "one_month_return_numeric": 3.1,
-            "three_month_return_numeric": 7.4,
-            "volatility_pct": 24.6,
-        },
-        {
-            "fund_code": "999006",
-            "fund_name": "华证新能源储能联接C",
-            "fund_size": "6.3亿元",
-            "fund_size_numeric": 6.3e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "12.30%",
-            "one_year_return_numeric": 12.3,
-            "one_month_return_numeric": 3.0,
-            "three_month_return_numeric": 7.2,
-            "volatility_pct": 24.4,
-        },
-        {
-            "fund_code": "999007",
-            "fund_name": "华证高端装备制造联接A",
-            "fund_size": "10.9亿元",
-            "fund_size_numeric": 10.9e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "15.20%",
-            "one_year_return_numeric": 15.2,
-            "one_month_return_numeric": 3.6,
-            "three_month_return_numeric": 8.1,
-            "volatility_pct": 21.8,
-        },
-        {
-            "fund_code": "999008",
-            "fund_name": "华证医药健康联接A",
-            "fund_size": "9.2亿元",
-            "fund_size_numeric": 9.2e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "8.40%",
-            "one_year_return_numeric": 8.4,
-            "one_month_return_numeric": 1.8,
-            "three_month_return_numeric": 4.6,
-            "volatility_pct": 19.5,
-        },
-        {
-            "fund_code": "999009",
-            "fund_name": "华证消费升级联接A",
-            "fund_size": "13.7亿元",
-            "fund_size_numeric": 13.7e8,
-            "fund_type": "股票型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "10.60%",
-            "one_year_return_numeric": 10.6,
-            "one_month_return_numeric": 2.5,
-            "three_month_return_numeric": 6.0,
-            "volatility_pct": 20.2,
-        },
-        {
-            "fund_code": "999010",
-            "fund_name": "华证金融蓝筹联接A",
-            "fund_size": "20.3亿元",
-            "fund_size_numeric": 20.3e8,
-            "fund_type": "混合型",
-            "fund_manager": "Mock Manager",
-            "one_year_return": "7.20%",
-            "one_year_return_numeric": 7.2,
-            "one_month_return_numeric": 1.4,
-            "three_month_return_numeric": 3.8,
-            "volatility_pct": 16.1,
-        },
-    ]
-    df = pd.DataFrame(rows)
-    df["source"] = "mock fund universe"
-    df["data_date"] = date.today().isoformat()
-    return df
 
 
 def _norm_col(value: Any) -> str:
@@ -269,7 +111,17 @@ def _parse_fund_size(value: Any) -> Tuple[Optional[float], str]:
         return None, ""
     if not isinstance(value, str):
         f = _to_float(value)
-        return f, "" if f is None else str(value)
+        if f is None:
+            return None, ""
+        if abs(f) >= 1e12:
+            text = f"{f / 1e12:.2f}万亿元"
+        elif abs(f) >= 1e8:
+            text = f"{f / 1e8:.2f}亿元"
+        elif abs(f) >= 1e4:
+            text = f"{f / 1e4:.2f}万元"
+        else:
+            text = str(value)
+        return f, text
     s = value.strip().replace(",", "")
     m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(万亿|亿|万)元?", s)
     if m:
@@ -321,7 +173,6 @@ def _display_text(value: Any, max_length: int = 300) -> str:
     return sanitize_text(str(value), max_length=max_length)[0]
 
 
-# MODIFIED: hard 5-second cap for every Layer 1/2 attempt.
 def _run_with_timeout(fn, timeout: float = HTTP_TIMEOUT_SECONDS) -> Any:
     if timeout <= 0:
         timeout = 0.1
@@ -335,68 +186,6 @@ def _run_with_timeout(fn, timeout: float = HTTP_TIMEOUT_SECONDS) -> Any:
     except Exception:
         executor.shutdown(wait=False, cancel_futures=True)
         raise
-
-
-def _http_retryable(exc: Exception) -> bool:
-    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
-        return True
-    if isinstance(exc, _requests.RequestException):
-        return True
-    return False
-
-
-@retry(
-    stop=stop_after_attempt(2),
-    wait=wait_fixed(0.5),
-    retry=retry_if_exception(_http_retryable),
-    reraise=True,
-)
-def _http_get_json(
-    url: str,
-    params: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: float = HTTP_TIMEOUT_SECONDS,
-) -> Any:
-    request_headers = headers or {}
-    if _cffi_requests is not None:
-        response = _cffi_requests.get(
-            url,
-            params=params,
-            headers=request_headers,
-            timeout=timeout,
-            impersonate="chrome124",
-        )
-    else:
-        response = _requests.get(url, params=params, headers=request_headers, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
-
-
-@retry(
-    stop=stop_after_attempt(2),
-    wait=wait_fixed(0.5),
-    retry=retry_if_exception(_http_retryable),
-    reraise=True,
-)
-def _http_get_text(
-    url: str,
-    params: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, str]] = None,
-    timeout: float = HTTP_TIMEOUT_SECONDS,
-) -> str:
-    request_headers = headers or {}
-    if _cffi_requests is not None:
-        response = _cffi_requests.get(
-            url,
-            params=params,
-            headers=request_headers,
-            timeout=timeout,
-            impersonate="chrome124",
-        )
-    else:
-        response = _requests.get(url, params=params, headers=request_headers, timeout=timeout)
-    response.raise_for_status()
-    return response.text
 
 
 def _remaining_seconds(deadline: float) -> float:
@@ -415,7 +204,7 @@ def _normalize_capital_flow_akshare(raw: Any) -> Optional[pd.DataFrame]:
 
     code_col = None
     for col in df.columns:
-        extracted = df[col].astype(str).str.extract(r"(BK\d{4}|\d{6})", expand=False).dropna()
+        extracted = df[col].astype(str).str.extract(r"(BK\d{4})", expand=False).dropna()
         if not extracted.empty:
             code_col = col
             break
@@ -424,7 +213,7 @@ def _normalize_capital_flow_akshare(raw: Any) -> Optional[pd.DataFrame]:
         {
             "industry": df[industry_col].astype(str).str.strip(),
             "industry_code": (
-                df[code_col].astype(str).str.extract(r"(BK\d{4}|\d{6})", expand=False)
+                df[code_col].astype(str).str.extract(r"(BK\d{4})", expand=False)
                 if code_col is not None
                 else ""
             ),
@@ -447,178 +236,63 @@ def _normalize_capital_flow_akshare(raw: Any) -> Optional[pd.DataFrame]:
     return out
 
 
-def _try_akshare_capital_flow(deadline: float) -> Tuple[Optional[pd.DataFrame], str, int]:
+def _try_akshare_capital_flow() -> Tuple[pd.DataFrame, str]:
     if ak is None:
-        return None, "layer1-unavailable", 3
-    last_error: Optional[Exception] = None
-    for source in ("sina", "tencent"):
-        if time.monotonic() >= deadline:
-            break
-        try:
-            raw = _run_with_timeout(
-                lambda src=source: ak.stock_sector_fund_flow_rank(
-                    indicator="今日",
-                    sector_type="行业资金流",
-                    source=src,
-                ),
-                timeout=_remaining_seconds(deadline),
-            )
-            normalized = _normalize_capital_flow_akshare(raw)
-            if normalized is not None:
-                return normalized, f"akshare-layer1-{source}", 1
-        except TypeError:
-            last_error = TypeError("akshare source parameter unsupported")
-        except Exception as exc:
-            last_error = exc
-
-    if time.monotonic() < deadline:
-        try:
-            raw = _run_with_timeout(
-                lambda: ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流"),
-                timeout=_remaining_seconds(deadline),
-            )
-            normalized = _normalize_capital_flow_akshare(raw)
-            if normalized is not None:
-                return normalized, "akshare-layer1-default", 1
-        except Exception as exc:
-            last_error = exc
-    return None, f"layer1-failed:{type(last_error).__name__ if last_error else 'empty'}", 3
-
-
-def _try_direct_capital_flow(deadline: float) -> Tuple[Optional[pd.DataFrame], str, int]:
-    url = "https://push2.eastmoney.com/api/qt/clist/get"
-    headers = {
-        "Referer": "https://data.eastmoney.com/bkzj/hy.html",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-    }
-    for fs in ("m:90 t:2", "m:90+t:2+f:!50"):
-        if time.monotonic() >= deadline:
-            break
-        params = {
-            "pn": "1",
-            "pz": "20",
-            "po": "1",
-            "np": "1",
-            "ut": "b2884a393a59ad64002292a3e90d46a5",
-            "fltt": "2",
-            "invt": "2",
-            "fid0": "f62",
-            "fs": fs,
-            "stat": "1",
-            "fields": "f12,f14,f2,f3,f62,f184",
-            "rt": str(int(time.time() * 1000)),
-        }
-        try:
-            payload = _run_with_timeout(
-                lambda p=params: _http_get_json(url, params=p, headers=headers),
-                timeout=_remaining_seconds(deadline),
-            )
-            diff = payload.get("data", {}).get("diff") if isinstance(payload, dict) else None
-            if not isinstance(diff, list) or not diff:
-                continue
-            rows = []
-            for item in diff:
-                if not isinstance(item, dict):
-                    continue
-                rows.append(
-                    {
-                        "industry": _display_text(item.get("f14"), 60),
-                        "industry_code": _display_text(item.get("f12"), 20),
-                        "main_net_inflow": _to_float(item.get("f62")),
-                        "change_pct": _to_float(item.get("f3")),
-                    }
-                )
-            result = pd.DataFrame(rows).dropna(subset=["industry", "main_net_inflow"])
-            result["main_net_inflow"] = pd.to_numeric(result["main_net_inflow"], errors="coerce")
-            result = result.sort_values("main_net_inflow", ascending=False).head(5).reset_index(drop=True)
-            if result.empty:
-                continue
-            result["data_date"] = date.today().isoformat()
-            return result, "curl_cffi-layer2-eastmoney", 2
-        except Exception:
-            continue
-    return None, "layer2-failed", 3
+        return pd.DataFrame(), "akshare-unavailable"
+    try:
+        raw = _run_with_timeout(
+            lambda: ak.stock_sector_fund_flow_rank(
+                indicator="今日",
+                sector_type="行业资金流",
+            ),
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        df = _normalize_capital_flow_akshare(raw)
+        if df is None or df.empty:
+            return pd.DataFrame(), "akshare-empty"
+        df["source"] = "akshare"
+        df["data_date"] = date.today().isoformat()
+        return df.head(5).reset_index(drop=True), "akshare"
+    except Exception:
+        return pd.DataFrame(), "akshare-failed"
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_capital_flow() -> Tuple[pd.DataFrame, Dict[str, Any], List[str]]:
-    # MODIFIED: strict three-layer defense; never raises, always returns a populated DataFrame.
     warnings: List[str] = []
-    try:
-        deadline = time.monotonic() + HTTP_TIMEOUT_SECONDS
-        df, source, layer = _try_akshare_capital_flow(deadline)
-        if df is None:
-            df, source, layer = _try_direct_capital_flow(deadline)
-            if df is not None:
-                warnings.append(
-                    "Layer 1 (akshare) failed; Layer 2 TLS-fingerprint direct source succeeded. "
-                    "Confidence: MEDIUM."
-                )
-            else:
-                warnings.append(
-                    "Layer 1 and Layer 2 both failed within the 5s budget; using static fallback. "
-                    "Confidence: LOW."
-                )
-
-        if df is None:
-            df = _mock_capital_flow_df()
-            source = "static-layer3"
-            layer = 3
-
-        df = df.head(5).reset_index(drop=True)
-        df["source"] = source
-        df["data_date"] = date.today().isoformat()
-        confidence_floor = {1: "HIGH", 2: "MEDIUM", 3: "LOW"}.get(layer, "LOW")
-        return df, {
-            "source": source,
-            "layer": layer,
-            "confidence_floor": confidence_floor,
-            "is_fallback": layer == 3,
-            "as_of": datetime.now().isoformat(timespec="seconds"),
-        }, warnings
-    except Exception as exc:
-        warnings.append(
-            f"Capital flow defensive fetch raised an unexpected error ({type(exc).__name__}); "
-            "using static fallback. Confidence: LOW."
-        )
-        fallback = _mock_capital_flow_df()
-        return fallback, {
-            "source": "static-layer3-unexpected",
-            "layer": 3,
-            "confidence_floor": "LOW",
-            "is_fallback": True,
-            "as_of": datetime.now().isoformat(timespec="seconds"),
-        }, warnings
+    df, source = _try_akshare_capital_flow()
+    if df.empty:
+        warnings.append("Capital flow data is empty; AI analysis confidence will be LOW.")
+    return df, {
+        "source": source,
+        "as_of": datetime.now().isoformat(timespec="seconds"),
+    }, warnings
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def _fetch_capital_flow_history(industry_code: str) -> Optional[pd.DataFrame]:
-    # MODIFIED: history now uses the direct Eastmoney JSON API with curl_cffi, not akshare.
-    if not industry_code or not re.fullmatch(r"BK\d{4}", str(industry_code)):
+def _fetch_capital_flow_history(industry_name: str) -> Optional[pd.DataFrame]:
+    if not industry_name:
+        return None
+    if ak is None:
         return None
     try:
-        payload = _http_get_json(
-            "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
-            params={
-                "lmt": "0",
-                "klt": "101",
-                "secid": f"90.{industry_code}",
-                "fields1": "f1,f2,f3,f7",
-                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
-            },
-            headers={"Referer": "https://data.eastmoney.com/"},
+        raw = _run_with_timeout(
+            lambda: ak.stock_sector_fund_flow_hist(symbol=str(industry_name)),
             timeout=HTTP_TIMEOUT_SECONDS,
         )
-        klines = payload.get("data", {}).get("klines", []) if isinstance(payload, dict) else []
-        rows = []
-        for line in klines:
-            parts = str(line).split(",")
-            if len(parts) >= 2:
-                rows.append({"date": parts[0], "main_net_inflow": _to_float(parts[1])})
-        out = pd.DataFrame(rows).dropna()
+        df = pd.DataFrame(raw).copy()
+        if df.empty:
+            return None
+        date_col = _pick_col(df, ["日期"])
+        flow_col = _pick_col(df, ["主力净流入"])
+        if date_col is None or flow_col is None:
+            return None
+        out = pd.DataFrame(
+            {
+                "date": df[date_col],
+                "main_net_inflow": pd.to_numeric(df[flow_col], errors="coerce"),
+            }
+        ).dropna()
         return out if not out.empty else None
     except Exception:
         return None
@@ -626,15 +300,11 @@ def _fetch_capital_flow_history(industry_code: str) -> Optional[pd.DataFrame]:
 
 def validate_capital_flow(
     df: pd.DataFrame,
-    meta: Dict[str, Any],
     warnings: List[str],
 ) -> Tuple[pd.DataFrame, str, List[str], bool]:
-    # MODIFIED: anomaly validation now uses the Layer 2 history endpoint and preserves layer metadata.
     if df is None or df.empty:
-        warnings.append("Capital flow data is empty; downgrading to mock/previous-day data.")
-        return _mock_capital_flow_df(), "mock/previous-day (empty)", warnings, True
-    if meta.get("is_fallback"):
-        return df, str(meta.get("source", "mock/previous-day")), warnings, False
+        warnings.append("Capital flow data is empty; skipping validation.")
+        return pd.DataFrame(), "empty", warnings, True
 
     inflows = pd.to_numeric(df["main_net_inflow"], errors="coerce").dropna()
     anomaly = False
@@ -642,8 +312,8 @@ def validate_capital_flow(
         anomaly = True
         warnings.append("Capital flow anomaly: all industries show the same net inflow.")
 
-    top_industry_code = str(df.iloc[0].get("industry_code", "")) if not df.empty else ""
-    history = _fetch_capital_flow_history(top_industry_code) if top_industry_code else None
+    top_industry_name = str(df.iloc[0].get("industry", "")) if not df.empty else ""
+    history = _fetch_capital_flow_history(top_industry_name) if top_industry_name else None
     if history is not None and len(history) >= 5:
         hist_values = pd.to_numeric(history["main_net_inflow"], errors="coerce").dropna()
         if len(hist_values) >= 5:
@@ -659,28 +329,21 @@ def validate_capital_flow(
                     )
     else:
         warnings.append(
-            "Historical outlier check skipped: simplified direct history is unavailable; "
+            "Historical outlier check skipped: akshare history is unavailable; "
             "capital flow freshness may be uncertain."
         )
 
     if anomaly:
-        warnings.append("Downgrading capital flow to static fallback data due to detected anomaly.")
-        return _mock_capital_flow_df(), "static-layer3 (anomaly)", warnings, True
-    return df, str(meta.get("source", "capital-flow")), warnings, False
+        warnings.append("Capital flow anomaly detected; returning empty data to avoid unreliable signals.")
+        return pd.DataFrame(), "empty-anomaly", warnings, True
+    return df, str(df.iloc[0].get("source", "akshare")), warnings, False
 
 
 def _fetch_wallstreetcn_feed() -> List[Dict[str, Any]]:
-    # MODIFIED: direct JSON feed; no akshare, no retry, explicit 5s timeout.
     try:
         response = _requests.get(
             "https://api.wallstreetcn.com/v1/feed",
             params={"limit": "10"},
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                )
-            },
             timeout=HTTP_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -716,18 +379,11 @@ def _fetch_wallstreetcn_feed() -> List[Dict[str, Any]]:
 
 
 def _fetch_rss_feed() -> List[Dict[str, Any]]:
-    # MODIFIED: feedparser on public RSS; failure returns an empty list, never raises.
     if _feedparser is None:
         return []
     try:
         response = _requests.get(
             "https://36kr.com/feed",
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                )
-            },
             timeout=HTTP_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -739,11 +395,10 @@ def _fetch_rss_feed() -> List[Dict[str, Any]]:
     feed_source = _display_text(parsed.feed.get("title") if parsed.feed else "36氪 RSS", 80)
     for entry in parsed.entries[:10]:
         content_value = ""
-        if entry.get("content"):
-            try:
-                content_value = entry["content"][0].get("value", "")
-            except Exception:
-                content_value = ""
+        content_items = entry.get("content")
+        if isinstance(content_items, list) and content_items:
+            first_content = content_items[0] if isinstance(content_items[0], dict) else {}
+            content_value = first_content.get("value", "")
         summary = _display_text(entry.get("summary") or content_value or "", 600)
         title = _display_text(entry.get("title") or summary[:80], 200)
         if not title and not summary:
@@ -778,7 +433,6 @@ def _policy_list_invalid(policy_signals: Sequence[Dict[str, Any]]) -> bool:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_policy_signals() -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[str]]:
-    # MODIFIED: akshare news calls are abandoned; only RSS/direct public feeds are used.
     warnings: List[str] = []
     candidates: List[Dict[str, Any]] = []
     for fetcher in (_fetch_wallstreetcn_feed, _fetch_rss_feed):
@@ -790,8 +444,6 @@ def fetch_policy_signals() -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[s
         warnings.append("今日暂无实时政策新闻。")
         return [], {
             "source": "empty-rss",
-            "is_fallback": True,
-            "confidence_floor": "LOW",
             "as_of": datetime.now().isoformat(timespec="seconds"),
         }, warnings
 
@@ -804,233 +456,53 @@ def fetch_policy_signals() -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[s
             unique.append(item)
     return unique[:10], {
         "source": "rss-policy-feed",
-        "is_fallback": False,
-        "confidence_floor": "MEDIUM",
         "as_of": datetime.now().isoformat(timespec="seconds"),
     }, warnings
 
 
-def _try_akshare_fund_rank(deadline: float) -> Tuple[Optional[pd.DataFrame], str, int]:
-    # MODIFIED: Layer 1 with source probing, capped by the global 5s budget.
+def _try_akshare_fund_rank() -> Tuple[pd.DataFrame, str]:
     if ak is None:
-        return None, "layer1-unavailable", 3
-    last_error: Optional[Exception] = None
-    for source in ("sina", "tencent"):
-        if time.monotonic() >= deadline:
-            break
-        try:
-            raw = _run_with_timeout(
-                lambda src=source: ak.fund_open_fund_rank_em(symbol="全部", source=src),
-                timeout=_remaining_seconds(deadline),
-            )
-            normalized = _normalize_fund_rank(raw)
-            if normalized is not None and not normalized.empty:
-                return normalized, f"akshare-layer1-{source}", 1
-        except TypeError:
-            last_error = TypeError("akshare source parameter unsupported")
-        except Exception as exc:
-            last_error = exc
-    if time.monotonic() < deadline:
-        try:
-            raw = _run_with_timeout(
-                lambda: ak.fund_open_fund_rank_em(symbol="全部"),
-                timeout=_remaining_seconds(deadline),
-            )
-            normalized = _normalize_fund_rank(raw)
-            if normalized is not None and not normalized.empty:
-                return normalized, "akshare-layer1-default", 1
-        except Exception as exc:
-            last_error = exc
-    return None, f"layer1-failed:{type(last_error).__name__ if last_error else 'empty'}", 3
-
-
-def _normalize_direct_fund_rank(datas: Sequence[str]) -> pd.DataFrame:
-    rows: List[Dict[str, Any]] = []
-    for line in datas:
-        parts = str(line).split(",")
-        if len(parts) < 17:
-            continue
-        rows.append(
-            {
-                "fund_code": _clean_fund_code(parts[1]),
-                "fund_name": _display_text(parts[2], 80),
-                "one_year_return_numeric": _to_float(parts[12]),
-                "one_month_return_numeric": _to_float(parts[9]),
-                "one_week_return_numeric": _to_float(parts[8]),
-                "three_month_return_numeric": _to_float(parts[10]),
-                "six_month_return_numeric": _to_float(parts[11]),
-                "ytd_return_numeric": _to_float(parts[15]),
-            }
-        )
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    out["fund_size"] = ""
-    out["fund_size_numeric"] = None
-    out["fund_type"] = ""
-    out["fund_manager"] = ""
-    out["volatility_pct"] = None
-    out["one_year_return"] = out["one_year_return_numeric"].map(
-        lambda value: f"{value:.2f}%" if value is not None else "N/A"
-    )
-    out["data_date"] = date.today().isoformat()
-    return out.drop_duplicates(subset=["fund_code"], keep="first")
-
-
-def _try_direct_fund_rank(deadline: float) -> Tuple[Optional[pd.DataFrame], str, int]:
-    # MODIFIED: Layer 2 direct Eastmoney rankhandler JSON with Chrome 124 TLS fingerprint.
-    url = "https://fund.eastmoney.com/data/rankhandler.aspx"
-    headers = {
-        "Referer": "https://fund.eastmoney.com/fundguzhi.html",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-    }
-    params = {
-        "op": "ph",
-        "dt": "kf",
-        "ft": "all",
-        "rs": "",
-        "gs": "0",
-        "sc": "1nzf",
-        "st": "desc",
-        "sd": (date.today() - timedelta(days=365)).strftime("%Y-%m-%d"),
-        "ed": date.today().strftime("%Y-%m-%d"),
-        "qdii": "",
-        "tabSubtype": ",,,,,,",
-        "pi": "1",
-        "pn": "30000",
-        "dx": "1",
-        "v": "0.1",
-    }
+        return pd.DataFrame(), "akshare-unavailable"
     try:
-        text = _run_with_timeout(
-            lambda: _http_get_text(url, params=params, headers=headers),
-            timeout=_remaining_seconds(deadline),
+        raw = _run_with_timeout(
+            lambda: ak.fund_open_fund_rank_em(symbol="全部"),
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
-        start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end <= start:
-            return None, "layer2-failed:bad-jsonp", 3
-        payload = json.loads(text[start : end + 1])
-        datas = payload.get("datas", []) if isinstance(payload, dict) else []
-        normalized = _normalize_direct_fund_rank(datas)
-        if normalized is None or normalized.empty:
-            return None, "layer2-failed:empty", 3
-        return normalized, "curl_cffi-layer2-eastmoney-rank", 2
-    except Exception as exc:
-        return None, f"layer2-failed:{type(exc).__name__}", 3
+        df = _normalize_fund_rank(raw)
+        if df is None or df.empty:
+            return pd.DataFrame(), "akshare-empty"
+        df["data_date"] = date.today().isoformat()
+        return df, "akshare"
+    except Exception:
+        return pd.DataFrame(), "akshare-failed"
 
 
-def _try_akshare_fund_scale(deadline: float) -> Tuple[Optional[pd.DataFrame], str, int]:
-    # MODIFIED: Layer 1; akshare's Sina scale API is type-scoped, so each supported type is attempted.
+def _try_akshare_fund_scale() -> Tuple[pd.DataFrame, str]:
     if ak is None:
-        return None, "layer1-unavailable", 3
+        return pd.DataFrame(), "akshare-unavailable"
     fund_types = ["股票型基金", "混合型基金", "债券型基金", "货币型基金", "QDII基金"]
     frames: List[pd.DataFrame] = []
-    last_error: Optional[Exception] = None
-    for source in ("sina", "tencent"):
+    deadline = time.monotonic() + HTTP_TIMEOUT_SECONDS
+    for fund_type in fund_types:
         if time.monotonic() >= deadline:
             break
-        for fund_type in fund_types:
-            try:
-                raw = _run_with_timeout(
-                    lambda ft=fund_type, src=source: ak.fund_scale_open_sina(symbol=ft, source=src),
-                    timeout=_remaining_seconds(deadline),
-                )
-                normalized = _normalize_fund_scale(raw)
-                if normalized is not None and not normalized.empty:
-                    frames.append(normalized)
-            except TypeError:
-                last_error = TypeError("akshare source parameter unsupported")
-            except Exception as exc:
-                last_error = exc
-    if not frames and time.monotonic() < deadline:
-        for fund_type in fund_types:
-            try:
-                raw = _run_with_timeout(
-                    lambda ft=fund_type: ak.fund_scale_open_sina(symbol=ft),
-                    timeout=_remaining_seconds(deadline),
-                )
-                normalized = _normalize_fund_scale(raw)
-                if normalized is not None and not normalized.empty:
-                    frames.append(normalized)
-            except Exception as exc:
-                last_error = exc
-    if frames:
-        combined = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["fund_code"], keep="first")
-        return combined, "akshare-layer1-scale", 1
-    return None, f"layer1-failed:{type(last_error).__name__ if last_error else 'empty'}", 3
-
-
-def _try_direct_fund_scale(deadline: float) -> Tuple[Optional[pd.DataFrame], str, int]:
-    # MODIFIED: Layer 2 direct Sina JSONP endpoint fetched with curl_cffi.
-    url = (
-        "http://vip.stock.finance.sina.com.cn/fund_center/data/jsonp.php/"
-        "IO.XSRV2.CallbackList['J2cW8KXheoWKdSHc']/NetValueReturn_Service.NetValueReturnOpen"
-    )
-    type_map = {"": "", "2": "股票型基金", "1": "混合型基金", "3": "债券型基金", "5": "货币型基金", "6": "QDII基金"}
-    headers = {
-        "Referer": "https://vip.stock.finance.sina.com.cn/fund_center/",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-    }
-    for type2 in ("", "2", "1", "3", "5", "6"):
-        if time.monotonic() >= deadline:
-            break
-        params = {
-            "page": "1",
-            "num": "10000",
-            "sort": "zmjgm",
-            "asc": "0",
-            "ccode": "",
-            "type2": type2,
-            "type3": "",
-        }
         try:
-            text = _run_with_timeout(
-                lambda p=params: _http_get_text(url, params=p, headers=headers),
+            raw = _run_with_timeout(
+                lambda ft=fund_type: ak.fund_scale_open_sina(symbol=ft),
                 timeout=_remaining_seconds(deadline),
             )
-            match = re.search(r"\(\s*(\{.*\})\s*\)", text, re.S)
-            if not match:
-                continue
-            payload = json.loads(match.group(1))
-            raw_items = payload.get("data", []) if isinstance(payload, dict) else []
-            rows = []
-            for item in raw_items if isinstance(raw_items, list) else []:
-                if not isinstance(item, dict):
-                    continue
-                scale_wan = _to_float(item.get("zmjgm"))
-                rows.append(
-                    {
-                        "fund_code": _clean_fund_code(item.get("symbol")),
-                        "fund_name": _display_text(item.get("sname"), 80),
-                        "fund_size": (
-                            f"{scale_wan:.2f}万元"
-                            if scale_wan is not None
-                            else ""
-                        ),
-                        "fund_size_numeric": (
-                            round(scale_wan * 1e4, 2)
-                            if scale_wan is not None
-                            else None
-                        ),
-                        "fund_type": type_map.get(type2, ""),
-                        "fund_manager": _display_text(item.get("jjjl"), 80),
-                    }
-                )
-            result = pd.DataFrame(rows).drop_duplicates(subset=["fund_code"], keep="first")
-            if result.empty:
-                continue
-            result["data_date"] = date.today().isoformat()
-            return result, "curl_cffi-layer2-sina-scale", 2
+            normalized = _normalize_fund_scale(raw)
+            if normalized is not None and not normalized.empty:
+                frames.append(normalized)
         except Exception:
             continue
-    return None, "layer2-failed", 3
+    if not frames:
+        return pd.DataFrame(), "akshare-failed"
+    combined = pd.concat(frames, ignore_index=True).drop_duplicates(
+        subset=["fund_code"], keep="first"
+    )
+    combined["data_date"] = date.today().isoformat()
+    return combined, "akshare"
 
 
 def _normalize_fund_rank(raw: pd.DataFrame) -> pd.DataFrame:
@@ -1107,155 +579,90 @@ def _normalize_fund_scale(raw: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_fund_universe() -> Tuple[pd.DataFrame, Dict[str, Any], List[str]]:
-    # MODIFIED: fund rank and fund scale each use the strict Layer 1 -> Layer 2 -> Layer 3 path.
     warnings: List[str] = []
-    try:
-        deadline = time.monotonic() + HTTP_TIMEOUT_SECONDS
-        rank_df, rank_source, rank_layer = _try_akshare_fund_rank(deadline)
-        if rank_df is None:
-            rank_df, rank_source, rank_layer = _try_direct_fund_rank(deadline)
-            if rank_df is not None:
-                warnings.append(
-                    "Fund rank Layer 1 failed; Layer 2 direct Eastmoney source succeeded. "
-                    "Confidence: MEDIUM."
-                )
-            else:
-                warnings.append(
-                    "Fund rank Layer 1 and Layer 2 failed; using static fallback. Confidence: LOW."
-                )
-        if rank_df is None:
-            rank_df = _mock_fund_universe_df()
-            rank_source = "static-layer3-fund-rank"
-            rank_layer = 3
-
-        scale_df, scale_source, scale_layer = _try_akshare_fund_scale(deadline)
-        if scale_df is None:
-            scale_df, scale_source, scale_layer = _try_direct_fund_scale(deadline)
-            if scale_df is not None:
-                warnings.append(
-                    "Fund scale Layer 1 failed; Layer 2 direct Sina source succeeded. "
-                    "Confidence: MEDIUM."
-                )
-            else:
-                warnings.append(
-                    "Fund scale Layer 1 and Layer 2 failed; size fields will use available static data. "
-                    "Confidence: LOW."
-                )
-
-        if scale_df is None:
-            scale_df = _mock_fund_universe_df()[
-                ["fund_code", "fund_size", "fund_size_numeric", "fund_type", "fund_manager"]
-            ]
-            scale_source = "static-layer3-fund-scale"
-            scale_layer = 3
-
-        universe = rank_df
-        keep_cols = ["fund_code", "fund_size", "fund_size_numeric", "fund_type", "fund_manager"]
-        universe = universe.drop(columns=[c for c in keep_cols if c in universe.columns], errors="ignore")
-        universe = universe.merge(scale_df[keep_cols], on="fund_code", how="left")
-        universe["one_year_return_numeric"] = pd.to_numeric(
-            universe["one_year_return_numeric"], errors="coerce"
-        )
-        universe = universe.sort_values(
-            by="one_year_return_numeric", ascending=False, na_position="last"
-        ).reset_index(drop=True)
-        universe["data_date"] = date.today().isoformat()
-
-        layers = [rank_layer, scale_layer]
-        confidence_floor = "LOW" if 3 in layers else ("MEDIUM" if 2 in layers else "HIGH")
-        is_fallback = confidence_floor == "LOW"
-        source_label = f"{rank_source}+{scale_source}"
-        return universe, {
-            "source": source_label,
-            "rank_layer": rank_layer,
-            "scale_layer": scale_layer,
-            "confidence_floor": confidence_floor,
-            "is_fallback": is_fallback,
-            "as_of": datetime.now().isoformat(timespec="seconds"),
-        }, warnings
-    except Exception as exc:
+    rank_df, rank_source = _try_akshare_fund_rank()
+    if rank_df.empty:
         warnings.append(
-            f"Fund universe defensive fetch raised an unexpected error ({type(exc).__name__}); "
-            "using static fallback. Confidence: LOW."
+            "Fund rank data is empty; AI analysis confidence will be LOW."
         )
-        return _mock_fund_universe_df(), {
-            "source": "static-layer3-fund-universe-unexpected",
-            "rank_layer": 3,
-            "scale_layer": 3,
-            "confidence_floor": "LOW",
-            "is_fallback": True,
+    scale_df, scale_source = _try_akshare_fund_scale()
+    if scale_df.empty:
+        warnings.append("Fund scale data is empty; fund size fields may be missing.")
+
+    source_label = f"{rank_source}+{scale_source}"
+    if rank_df.empty and scale_df.empty:
+        return pd.DataFrame(), {
+            "source": source_label,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+        }, warnings
+    if rank_df.empty:
+        for col in [
+            "fund_size",
+            "fund_size_numeric",
+            "fund_type",
+            "fund_manager",
+            "volatility_pct",
+            "one_year_return",
+            "one_year_return_numeric",
+            "one_month_return_numeric",
+            "three_month_return_numeric",
+        ]:
+            if col not in scale_df.columns:
+                scale_df[col] = None
+        return scale_df, {
+            "source": source_label,
             "as_of": datetime.now().isoformat(timespec="seconds"),
         }, warnings
 
+    universe = rank_df
+    keep_cols = ["fund_code", "fund_size", "fund_size_numeric", "fund_type", "fund_manager"]
+    merge_cols = [c for c in keep_cols if c != "fund_code" and c in universe.columns]
+    universe = universe.drop(columns=merge_cols, errors="ignore")
+    if not scale_df.empty:
+        universe = universe.merge(scale_df[keep_cols], on="fund_code", how="left")
+    universe["one_year_return_numeric"] = pd.to_numeric(
+        universe["one_year_return_numeric"], errors="coerce"
+    )
+    universe = universe.sort_values(
+        by="one_year_return_numeric", ascending=False, na_position="last"
+    ).reset_index(drop=True)
+    universe["data_date"] = date.today().isoformat()
+    return universe, {
+        "source": source_label,
+        "as_of": datetime.now().isoformat(timespec="seconds"),
+    }, warnings
 
-def _fetch_fund_volatility_direct(fund_code: str) -> Optional[float]:
-    # MODIFIED: Layer 2 direct Eastmoney JS payload for off-exchange fund NAV history.
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _fetch_fund_volatility(fund_code: str) -> Optional[float]:
+    if str(fund_code).startswith("999"):
+        return None
+    if ak is None:
+        return None
     try:
-        text = _http_get_text(
-            f"https://fund.eastmoney.com/pingzhongdata/{fund_code}.js",
-            headers={"Referer": f"https://fund.eastmoney.com/{fund_code}.html"},
+        raw = _run_with_timeout(
+            lambda: ak.fund_open_fund_info_em(
+                symbol=fund_code,
+                indicator="单位净值走势",
+                period="成立来",
+            ),
             timeout=HTTP_TIMEOUT_SECONDS,
         )
-        match = re.search(r"var\s+Data_netWorthTrend\s*=\s*(\[.*?\]);", text, re.S)
-        if not match:
+        df = pd.DataFrame(raw).copy()
+        if df.empty:
             return None
-        series = json.loads(match.group(1))
-        values = [_to_float(item.get("y")) for item in series if isinstance(item, dict)]
-        values = [value for value in values if value is not None]
+        nav_col = _pick_col(df, ["单位净值"])
+        if nav_col is None:
+            return None
+        values = pd.to_numeric(df[nav_col], errors="coerce").dropna()
         if len(values) < 5:
             return None
-        nav = pd.Series(values)
-        returns = nav.pct_change().dropna()
+        returns = values.pct_change().dropna()
         if len(returns) < 4:
             return None
         return float(returns.std(ddof=0) * math.sqrt(252) * 100)
     except Exception:
         return None
-
-
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def _fetch_fund_volatility(fund_code: str) -> Optional[float]:
-    # MODIFIED: all volatility fetchers are time-boxed; failure returns None, never raises.
-    if str(fund_code).startswith("999"):
-        return None
-    fetchers = []
-    if ak is not None:
-        fetchers.extend(
-            [
-                lambda: ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势"),
-                lambda: ak.fund_hist_em(
-                    symbol=fund_code,
-                    period="daily",
-                    start_date=(date.today() - timedelta(days=400)).strftime("%Y%m%d"),
-                    end_date=date.today().strftime("%Y%m%d"),
-                    adjust="",
-                ),
-            ]
-        )
-    fetchers.append(lambda: _fetch_fund_volatility_direct(fund_code))
-    for fetcher in fetchers:
-        try:
-            raw = _run_with_timeout(fetcher, timeout=HTTP_TIMEOUT_SECONDS)
-            if raw is None:
-                continue
-            df = pd.DataFrame(raw).copy() if not isinstance(raw, (float, int)) else None
-            if df is None:
-                return float(raw)
-            if df.empty:
-                continue
-            nav_col = _pick_col(df, ["单位净值"]) or _pick_col(df, ["close"]) or _pick_col(df, ["收盘"])
-            if nav_col is None:
-                continue
-            values = pd.to_numeric(df[nav_col], errors="coerce").dropna()
-            if len(values) < 5:
-                continue
-            returns = values.pct_change().dropna()
-            if len(returns) < 4:
-                continue
-            return float(returns.std(ddof=0) * math.sqrt(252) * 100)
-        except Exception:
-            continue
-    return None
 
 
 def _sector_keywords(sector_name: Any) -> List[str]:
@@ -1289,7 +696,9 @@ def select_relevant_funds(
         return pd.DataFrame()
     df = universe.copy()
     if "one_year_return_numeric" not in df.columns:
-        df["one_year_return_numeric"] = df.get("one_year_return", pd.Series(dtype=float)).map(
+        df["one_year_return_numeric"] = df.get(
+            "one_year_return", pd.Series(float("nan"), index=df.index)
+        ).map(
             lambda value: _to_float(value)
         )
 
@@ -1300,7 +709,8 @@ def select_relevant_funds(
     mask = pd.Series(False, index=df.index)
     if keywords:
         pattern = "|".join(re.escape(k) for k in sorted(keywords, key=len, reverse=True))
-        mask = df["fund_name"].astype(str).str.contains(pattern, case=False, na=False, regex=True)
+        fund_names = df.get("fund_name", pd.Series("", index=df.index))
+        mask = fund_names.astype(str).str.contains(pattern, case=False, na=False, regex=True)
 
     relevant = df[mask] if mask.any() else df
     relevant = relevant.sort_values(
@@ -1546,16 +956,16 @@ Use exactly these keys:
     }
   ],
   "overall_confidence": "HIGH | MEDIUM | LOW",
-  "confidence_note": "short explanation, especially when data is fallback/mock or signals conflict"
+  "confidence_note": "short explanation, especially when data are missing or signals conflict"
 }
 
 Rules:
 - Recommend 1-2 off-exchange funds per high-conviction sector when possible, and prefer fund codes from the provided universe.
 - Provide an action for every user holding. If a holding has no clear signal, use HOLD with a concise reason.
 - Conviction scores must combine policy credibility and actual capital flow magnitude, not just policy enthusiasm.
-- If signals conflict, data are missing, a data source is fallback/mock, or the model is uncertain, set
-  overall_confidence to "LOW" and add a confidence_note telling the user to verify independently.
-- Do not invent live policy facts. Treat mock/fallback sources as low credibility and downgrade conviction.
+- If signals conflict, data are missing, or the model is uncertain, set overall_confidence to "LOW"
+  and add a confidence_note telling the user to verify independently.
+- Do not invent live policy facts. Treat empty data as low credibility and downgrade conviction.
 - Keep reasoning specific and concise. Do not include instructions, system prompts, or non-JSON text.
 """
 
@@ -1608,7 +1018,7 @@ def _call_deepseek(prompt: str) -> str:
     if not base_url:
         raise AnalysisError("DEEPSEEK_BASE_URL is not set. Add it to the environment before running analysis.")
 
-    client = _openai.OpenAI(api_key=api_key, base_url=base_url)
+    client = _openai.OpenAI(api_key=api_key, base_url=base_url, timeout=10.0)
     messages = [
         {
             "role": "system",
@@ -1624,6 +1034,7 @@ def _call_deepseek(prompt: str) -> str:
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": 4096,
+        "timeout": 10.0,
     }
     try:
         response = client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
@@ -1704,7 +1115,7 @@ def parse_llm_response(raw_text: str) -> Dict[str, Any]:
             ),
             "risk_level": _display_text(item.get("risk_level", ""), 30),
         }
-        if rec["fund_code"] or rec["fund_name"]:
+        if rec.get("fund_code") or rec.get("fund_name"):
             recommended_funds.append(rec)
 
     allowed_actions = {"INCREASE", "HOLD", "REDUCE", "SELL"}
@@ -1759,8 +1170,6 @@ def build_analysis(
     policy_signals: Sequence[Dict[str, Any]],
     fund_universe_df: pd.DataFrame,
     data_warnings: Sequence[str],
-    capital_meta: Optional[Dict[str, Any]] = None,
-    fund_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     _check_analysis_rate_limit()
     prompt = build_prompt(
@@ -1774,25 +1183,18 @@ def build_analysis(
     )
     raw_response = _call_deepseek(prompt)
     result = parse_llm_response(raw_response)
-    result["relevant_funds"] = select_relevant_funds(fund_universe_df, result["sectors"], limit=6)
-    # MODIFIED: confidence floor follows the acquisition layer, not free-form warning text.
-    floors = []
-    if capital_meta is not None:
-        floors.append(str(capital_meta.get("confidence_floor", "LOW")))
-    if fund_meta is not None:
-        floors.append(str(fund_meta.get("confidence_floor", "LOW")))
-    floor = "LOW" if "LOW" in floors else ("MEDIUM" if "MEDIUM" in floors else "HIGH")
-    if floor == "LOW":
+    result["relevant_funds"] = select_relevant_funds(fund_universe_df, result.get("sectors", []), limit=6)
+    if (
+        capital_flow_df is None
+        or capital_flow_df.empty
+        or fund_universe_df is None
+        or fund_universe_df.empty
+        or not policy_signals
+    ):
         result["overall_confidence"] = "LOW"
         result["confidence_note"] = (
-            f"{result.get('confidence_note', '')} Both live data layers failed for one or more feeds; "
+            f"{result.get('confidence_note', '')} Required market or policy data are empty; "
             "confidence is forced to LOW. Verify independently before acting."
-        ).strip()
-    elif floor == "MEDIUM":
-        result["overall_confidence"] = "MEDIUM"
-        result["confidence_note"] = (
-            f"{result.get('confidence_note', '')} At least one feed required the Layer 2 "
-            "TLS-fingerprint fallback; confidence is capped at MEDIUM."
         ).strip()
     return result
 
@@ -1839,6 +1241,8 @@ def render_signals_tab(
             )
         )
         st.bar_chart(chart)
+    else:
+        st.info("Capital flow data is empty; AI analysis will be LOW confidence.")
 
     st.subheader("Policy Signals")
     if not policy_signals:
@@ -1862,12 +1266,12 @@ def render_signals_tab(
         if confidence == "LOW":
             st.error(
                 "This analysis is LOW confidence. Signals conflict, data are missing, "
-                "or fallback/mock data were used. Verify independently before acting."
+                "or required data were empty. Verify independently before acting."
             )
     if result and result.get("sectors"):
-        for sector in result["sectors"]:
-            score = float(sector["conviction_score"])
-            st.markdown(f"**{_display_text(sector['name'], 80)}**")
+        for sector in result.get("sectors", []):
+            score = float(sector.get("conviction_score", 0))
+            st.markdown(f"**{_display_text(sector.get('name', ''), 80)}**")
             st.progress(max(0.0, min(100.0, score)) / 100.0)
             st.write(_display_text(sector.get("reasoning", ""), 500))
             st.caption(
@@ -1918,7 +1322,7 @@ def render_funds_tab(fund_universe: pd.DataFrame, result: Optional[Dict[str, Any
     else:
         st.info("Run AI analysis to generate fund recommendations from the current signals.")
         if fund_universe is not None and not fund_universe.empty:
-            st.caption("Live/mock fund universe is loaded; the analysis will filter it by signal sectors.")
+            st.caption("Live fund universe is loaded; the analysis will filter it by signal sectors.")
             cols = ["fund_code", "fund_name", "fund_size", "one_year_return"]
             cols = [col for col in cols if col in fund_universe.columns]
             st.dataframe(fund_universe.head(20)[cols])
@@ -1969,7 +1373,7 @@ def render_rebalance_tab(
         if "LOW" in confidence.upper():
             st.warning(
                 "The model marked this analysis LOW confidence because signals conflict, data are missing, "
-                "or fallback/mock data were used. Verify independently before acting."
+                "or required data were empty. Verify independently before acting."
             )
 
     if holdings_df is not None and not holdings_df.empty:
@@ -1980,7 +1384,7 @@ def render_rebalance_tab(
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon=":bar_chart:", layout="wide")
     st.title(APP_TITLE)
-    st.caption("Personal reference analysis with validation, fallback data, and uncertainty reporting.")
+    st.caption("Personal reference analysis with validation and uncertainty reporting.")
 
     api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     base_url = os.getenv("DEEPSEEK_BASE_URL", "").strip()
@@ -1994,7 +1398,7 @@ def main() -> None:
     if _openai is None:
         st.sidebar.error("The openai package could not be imported. Install required dependencies.")
     if ak is None:
-        st.sidebar.error("The akshare package could not be imported. All market data will use mock fallbacks.")
+        st.sidebar.error("The akshare package could not be imported. All market data will use empty DataFrames.")
 
     with st.sidebar:
         st.header("Inputs")
@@ -2019,20 +1423,13 @@ def main() -> None:
         run_clicked = st.button("Run AI analysis", type="primary", use_container_width=True)
 
     with st.spinner("Loading and validating market data..."):
-        capital_flow, capital_meta, capital_warnings = fetch_capital_flow()
+        capital_flow, _, capital_warnings = fetch_capital_flow()
         policy_signals, policy_meta, policy_warnings = fetch_policy_signals()
-        fund_universe, fund_meta, fund_warnings = fetch_fund_universe()
+        fund_universe, _, fund_warnings = fetch_fund_universe()
 
-    capital_flow, cap_source, capital_warnings, capital_anomaly = validate_capital_flow(
-        capital_flow, capital_meta, capital_warnings.copy()
+    capital_flow, cap_source, capital_warnings, _ = validate_capital_flow(
+        capital_flow, capital_warnings.copy()
     )
-    if capital_anomaly:
-        capital_meta = {
-            **capital_meta,
-            "source": "static-layer3-anomaly",
-            "confidence_floor": "LOW",
-            "is_fallback": True,
-        }
     data_warnings = list(capital_warnings) + list(policy_warnings) + list(fund_warnings)
 
     if run_clicked:
@@ -2057,8 +1454,6 @@ def main() -> None:
                         policy_signals=policy_signals,
                         fund_universe_df=fund_universe,
                         data_warnings=data_warnings,
-                        capital_meta=capital_meta,
-                        fund_meta=fund_meta,
                     )
                 st.session_state["analysis_result"] = result
                 st.session_state["analysis_holdings"] = holdings_df
@@ -2070,20 +1465,8 @@ def main() -> None:
     analysis_result = st.session_state.get("analysis_result")
     analysis_holdings = st.session_state.get("analysis_holdings")
 
-    data_floors = [
-        str(capital_meta.get("confidence_floor", "LOW")),
-        str(fund_meta.get("confidence_floor", "LOW")),
-    ]
-    if "LOW" in data_floors:
-        st.warning(
-            "Layer 1 and Layer 2 both failed for at least one data feed. "
-            "AI analysis will be marked LOW confidence."
-        )
-    elif "MEDIUM" in data_floors:
-        st.warning(
-            "At least one data feed required the Layer 2 TLS-fingerprint fallback. "
-            "AI analysis will be capped at MEDIUM confidence."
-        )
+    if capital_flow.empty or fund_universe.empty:
+        st.warning("Market data is empty; AI analysis will be marked LOW confidence.")
     if not policy_signals:
         st.info("今日暂无实时政策新闻。")
 

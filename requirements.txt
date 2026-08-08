@@ -3,3 +3,5 @@ akshare>=1.14
 pandas>=2.0
 openai>=1.30
 tenacity>=8.2
+feedparser>=6.0
+requests>=2.31
